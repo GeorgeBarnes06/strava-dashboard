@@ -1,38 +1,64 @@
-.App {
-  text-align: center;
+.app-container {
+  padding: 20px;
+  font-family: Arial, sans-serif;
 }
 
-.App-logo {
-  height: 40vmin;
-  pointer-events: none;
-}
-
-@media (prefers-reduced-motion: no-preference) {
-  .App-logo {
-    animation: App-logo-spin infinite 20s linear;
-  }
-}
-
-.App-header {
-  background-color: #282c34;
-  min-height: 100vh;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  font-size: calc(10px + 2vmin);
+.strava-login-btn {
+  background-color: #FC5200;
   color: white;
+  padding: 10px 20px;
+  border: none;
+  border-radius: 5px;
+  cursor: pointer;
+  font-size: 16px;
 }
 
-.App-link {
-  color: #61dafb;
+.strava-login-btn:hover {
+  background-color: #e04700;
 }
 
-@keyframes App-logo-spin {
-  from {
-    transform: rotate(0deg);
-  }
-  to {
-    transform: rotate(360deg);
-  }
+.success-message {
+  color: #28a745;
+  font-weight: bold;
+}
+
+.load-activities-btn {
+  background-color: #007bff;
+  color: white;
+  padding: 10px 20px;
+  border: none;
+  border-radius: 5px;
+  cursor: pointer;
+  font-size: 16px;
+  margin-right: 10px;
+}
+
+.load-activities-btn:hover {
+  background-color: #0056b3;
+}
+
+.activities-container {
+  margin-top: 20px;
+}
+
+.activity-card {
+  border: 1px solid #ddd;
+  padding: 10px;
+  margin: 5px 0;
+  border-radius: 5px;
+  background-color: #f9f9f9;
+}
+
+.activity-card:hover {
+  background-color: #f0f0f0;
+  border-color: #ccc;
+}
+
+.activity-card strong {
+  color: #333;
+}
+
+.activity-card p {
+  margin: 5px 0;
+  color: #666;
 }
