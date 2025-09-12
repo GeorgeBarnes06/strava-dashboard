@@ -8,9 +8,9 @@ function App() {
   const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [accessToken, setAccessToken] = useState(null);
   
-  const clientID = "176645";
-  const clientSecret = "4adcb91979eaf12af1d597867f9d1561b9af5695";
-  const refreshToken = "594f6bb763e43e9e27e72c9588e10bed81972ebb"
+  const clientID = "";
+  const clientSecret = "";
+  const refreshToken = ""
   const auth_link = "https://www.strava.com/oauth/token"
   const activities_link = `https://www.strava.com/api/v3/athlete/activities`
 
