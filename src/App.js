@@ -14,13 +14,16 @@ function App() {
   const [selectedDistance, setSelectedDistance] = useState(null);
   const [customDistance, setCustomDistance] = useState('');
   const [showCustomInput, setShowCustomInput] = useState(false);
+  const [athleteId, setAthleteId] = useState(null);
+  const [athleteName, setAthleteName] = useState(null);
+  const [loadedFromDB, setLoadedFromDB] = useState(false);
   
   const clientID = process.env.REACT_APP_STRAVA_CLIENT_ID;
   const clientSecret = process.env.REACT_APP_STRAVA_CLIENT_SECRET;
   const refreshToken = process.env.REACT_APP_REFRESH_TOKEN;
   const activities_link = `https://www.strava.com/api/v3/athlete/activities`
+  const backend_url = 'http://localhost:5000';
 
-  // Distance presets in kilometers
   const distancePresets = [
     { label: '5K', distance: 5, tolerance: 0.5 },
     { label: '10K', distance: 10, tolerance: 1 },
@@ -55,11 +58,22 @@ function App() {
       });
       
       setAccessToken(response.data.access_token);
+      const athId = response.data.athlete.id;
+      const athName = `${response.data.athlete.firstname} ${response.data.athlete.lastname}`;
+      setAthleteId(athId);
+      setAthleteName(athName);
       setIsLoggedIn(true);
-      console.log('Successfully authenticated with Strava!', response.data);
       
       window.history.replaceState({}, document.title, "/");
-      await fetchActivities(response.data.access_token, 1, true);
+      
+      // Try loading from database first
+      const loadedFromDB = await loadActivitiesFromDB(athId);
+      
+      // If no data in DB, fetch from Strava
+      if (!loadedFromDB) {
+        console.log('No cached data found, fetching from Strava...');
+        await fetchActivities(response.data.access_token, 1, true, athId, athName);
+      }
       
     } catch (error) {
       console.error('Error exchanging code for token:', error);
@@ -70,14 +84,52 @@ function App() {
     setIsLoading(false);
   };
 
-  const fetchActivities = async (token = accessToken, page = 1, resetActivities = false) => {
+  const loadActivitiesFromDB = async (athleteId) => {
+    try {
+      const response = await axios.get(`${backend_url}/api/activities/${athleteId}/all`);
+      if (response.data.length > 0) {
+        // Convert MongoDB data back to Strava format
+        const formattedActivities = response.data.map(activity => ({
+          id: activity.stravaId,
+          name: activity.name,
+          distance: activity.distance,
+          moving_time: activity.movingTime,
+          average_heartrate: activity.averageHeartrate,
+          type: activity.type,
+          start_date: activity.startDate
+        }));
+        setActivites(formattedActivities);
+        setLoadedFromDB(true);
+        console.log(`Loaded ${formattedActivities.length} activities from database`);
+        return true;
+      }
+      return false;
+    } catch (error) {
+      console.error('Error loading from DB:', error);
+      return false;
+    }
+  };
+
+  const saveActivitiesToDB = async (activities, athleteId, athleteName) => {
+    try {
+      const response = await axios.post(`${backend_url}/api/activities/save`, {
+        activities: activities,
+        athleteId: athleteId,
+        athleteName: athleteName
+      });
+      console.log('Saved to database:', response.data);
+    } catch (error) {
+      console.error('Error saving to database:', error);
+    }
+  };
+
+  const fetchActivities = async (token = accessToken, page = 1, resetActivities = false, athId = athleteId, athName = athleteName) => {
     if (!token) return;
     
     setIsLoading(true);
     try {
       const perPage = 200;
       const response = await axios.get(`${activities_link}?access_token=${token}&page=${page}&per_page=${perPage}`);
-      console.log('Activities:', response.data);
       
       const newActivities = response.data;
       const runActivities = newActivities.filter(activity => activity.type === 'Run');
@@ -86,6 +138,11 @@ function App() {
         setActivites(runActivities);
       } else {
         setActivites(prev => [...prev, ...runActivities]);
+      }
+      
+      // Save to MongoDB
+      if (runActivities.length > 0 && athId) {
+        await saveActivitiesToDB(runActivities, athId, athName);
       }
       
       setHasMoreActivities(newActivities.length === perPage);
@@ -117,7 +174,7 @@ function App() {
       const customPreset = {
         label: `${customDistance}K`,
         distance: parseFloat(customDistance),
-        tolerance: Math.max(0.5, parseFloat(customDistance) * 0.1) // 10% tolerance, minimum 0.5km
+        tolerance: Math.max(0.5, parseFloat(customDistance) * 0.1)
       };
       setSelectedDistance(customPreset);
     }
@@ -132,11 +189,44 @@ function App() {
       const maxDistance = selectedDistance.distance + selectedDistance.tolerance;
       return activityDistanceKm >= minDistance && activityDistanceKm <= maxDistance;
     }).sort((a, b) => {
-      // Sort by pace (fastest first)
       const paceA = a.moving_time / (a.distance / 1000);
       const paceB = b.moving_time / (b.distance / 1000);
       return paceA - paceB;
     });
+  };
+
+  const calculatePerformanceStats = (activities) => {
+    if (!activities.length) return null;
+
+    const stats = {
+      totalRuns: activities.length,
+      avgPace: 0,
+      avgHeartRate: 0,
+      bestTime: activities[0]?.moving_time || 0,
+      improvement: 0
+    };
+
+    const totalPace = activities.reduce((sum, activity) => {
+      return sum + (activity.moving_time / (activity.distance / 1000));
+    }, 0);
+    stats.avgPace = totalPace / activities.length;
+
+    const activitiesWithHR = activities.filter(a => a.average_heartrate);
+    if (activitiesWithHR.length > 0) {
+      stats.avgHeartRate = activitiesWithHR.reduce((sum, activity) => {
+        return sum + activity.average_heartrate;
+      }, 0) / activitiesWithHR.length;
+    }
+
+    if (activities.length >= 6) {
+      const recent = activities.slice(-3);
+      const early = activities.slice(0, 3);
+      const recentAvgPace = recent.reduce((sum, a) => sum + (a.moving_time / (a.distance / 1000)), 0) / 3;
+      const earlyAvgPace = early.reduce((sum, a) => sum + (a.moving_time / (a.distance / 1000)), 0) / 3;
+      stats.improvement = ((earlyAvgPace - recentAvgPace) / earlyAvgPace) * 100;
+    }
+
+    return stats;
   };
 
   const formatTime = (seconds) => {
@@ -157,7 +247,67 @@ function App() {
     return `${minutes}:${secs.toString().padStart(2, '0')} /km`;
   };
 
+  const SimpleChart = ({ data, label, color = '#007bff' }) => {
+    if (!data || data.length < 2) return null;
+
+    const maxValue = Math.max(...data.map(d => d.value));
+    const minValue = Math.min(...data.map(d => d.value));
+    const range = maxValue - minValue || 1;
+
+    return (
+      <div className="simple-chart">
+        <h4>{label}</h4>
+        <div className="chart-container">
+          <svg viewBox="0 0 400 200" className="chart-svg">
+            {[0, 1, 2, 3, 4].map(i => (
+              <line
+                key={i}
+                x1={0}
+                y1={40 + i * 32}
+                x2={400}
+                y2={40 + i * 32}
+                stroke="#f0f0f0"
+                strokeWidth="1"
+              />
+            ))}
+            
+            <polyline
+              fill="none"
+              stroke={color}
+              strokeWidth="3"
+              points={data.map((point, index) => {
+                const x = (index / (data.length - 1)) * 380 + 10;
+                const y = 180 - ((point.value - minValue) / range) * 140;
+                return `${x},${y}`;
+              }).join(' ')}
+            />
+            
+            {data.map((point, index) => {
+              const x = (index / (data.length - 1)) * 380 + 10;
+              const y = 180 - ((point.value - minValue) / range) * 140;
+              return (
+                <circle
+                  key={index}
+                  cx={x}
+                  cy={y}
+                  r="4"
+                  fill={color}
+                  className="chart-point"
+                />
+              );
+            })}
+          </svg>
+          <div className="chart-labels">
+            <span>Oldest</span>
+            <span>Most Recent</span>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
   const filteredActivities = filterActivitiesByDistance();
+  const performanceStats = calculatePerformanceStats(filteredActivities);
 
   return (
     <div className="app-container">
@@ -169,7 +319,7 @@ function App() {
             <p className="login-subtitle">Connect your Strava account to analyze and compare your running performance across similar distances</p>
             {error && (
               <div className="error-message">
-                ⚠️ {error}
+                {error}
               </div>
             )}
             <button onClick={handleStravaLogin} className="strava-login-btn" disabled={isLoading}>
@@ -187,6 +337,12 @@ function App() {
             </div>
           ) : (
             <div className="performance-container">
+              {loadedFromDB && (
+                <div className="db-status">
+                  Loaded from database - <button onClick={() => fetchActivities(accessToken, 1, true)} className="refresh-btn">Refresh from Strava</button>
+                </div>
+              )}
+              
               <div className="distance-selector">
                 <h3>Select Distance to Compare</h3>
                 <div className="distance-buttons">
@@ -227,13 +383,88 @@ function App() {
                 )}
               </div>
 
-              {selectedDistance && (
+              {selectedDistance && filteredActivities.length > 0 && (
                 <div className="results-section">
                   <h3>
                     {selectedDistance.label} Runs 
                     ({selectedDistance.distance - selectedDistance.tolerance}km - {selectedDistance.distance + selectedDistance.tolerance}km)
                     <span className="results-count">({filteredActivities.length} runs found)</span>
                   </h3>
+
+                  {performanceStats && (
+                    <div className="analytics-section">
+                      <h4>Performance Analytics</h4>
+                      
+                      <div className="stats-grid">
+                        <div className="stat-card">
+                          <div className="stat-number">{performanceStats.totalRuns}</div>
+                          <div className="stat-label">Total Runs</div>
+                        </div>
+                        
+                        <div className="stat-card">
+                          <div className="stat-number">
+                            {Math.floor(performanceStats.avgPace / 60)}:
+                            {Math.floor(performanceStats.avgPace % 60).toString().padStart(2, '0')}
+                          </div>
+                          <div className="stat-label">Avg Pace /km</div>
+                        </div>
+                        
+                        {performanceStats.avgHeartRate > 0 && (
+                          <div className="stat-card">
+                            <div className="stat-number">{Math.round(performanceStats.avgHeartRate)}</div>
+                            <div className="stat-label">Avg Heart Rate</div>
+                          </div>
+                        )}
+                        
+                        <div className="stat-card">
+                          <div className="stat-number">{formatTime(performanceStats.bestTime)}</div>
+                          <div className="stat-label">Best Time</div>
+                        </div>
+                        
+                        {Math.abs(performanceStats.improvement) > 0.5 && (
+                          <div className={`stat-card ${performanceStats.improvement > 0 ? 'improvement' : 'decline'}`}>
+                            <div className="stat-number">
+                              {performanceStats.improvement > 0 ? '+' : ''}{performanceStats.improvement.toFixed(1)}%
+                            </div>
+                            <div className="stat-label">
+                              {performanceStats.improvement > 0 ? 'Improvement' : 'Change'} in Pace
+                            </div>
+                          </div>
+                        )}
+                      </div>
+
+                      <div className="charts-section">
+                        <SimpleChart 
+                          data={[...filteredActivities].reverse().map((activity) => ({
+                            value: activity.moving_time / (activity.distance / 1000),
+                            label: new Date(activity.start_date).toLocaleDateString()
+                          }))}
+                          label="Pace Over Time (seconds per km)"
+                          color="#007bff"
+                        />
+
+                        {filteredActivities.filter(a => a.average_heartrate).length > 1 && (
+                          <SimpleChart 
+                            data={[...filteredActivities].reverse().filter(a => a.average_heartrate).map((activity) => ({
+                              value: activity.average_heartrate,
+                              label: new Date(activity.start_date).toLocaleDateString()
+                            }))}
+                            label="Average Heart Rate Over Time (bpm)"
+                            color="#dc3545"
+                          />
+                        )}
+
+                        <SimpleChart 
+                          data={[...filteredActivities].reverse().map((activity) => ({
+                            value: activity.distance / 1000,
+                            label: new Date(activity.start_date).toLocaleDateString()
+                          }))}
+                          label="Distance Consistency (km)"
+                          color="#28a745"
+                        />
+                      </div>
+                    </div>
+                  )}
                   
                   {filteredActivities.length === 0 ? (
                     <div className="no-results">
@@ -253,7 +484,7 @@ function App() {
                             className={`activity-card clickable performance-card ${i === 0 ? 'best-performance' : ''}`}
                             onClick={() => window.open(`https://www.strava.com/activities/${activity.id}`, '_blank')}
                           >
-                            {i === 0 && <div className="best-badge">🏆 Best Time</div>}
+                            {i === 0 && <div className="best-badge">Best Time</div>}
                             <strong>{activity.name}</strong>
                             
                             <div className="performance-stats">
@@ -285,7 +516,7 @@ function App() {
                               </div>
                             </div>
                             
-                            <div className="click-hint">Click to view on Strava →</div>
+                            <div className="click-hint">Click to view on Strava</div>
                           </div>
                         ))}
                       </div>
@@ -305,9 +536,9 @@ function App() {
               
               {!selectedDistance && !showCustomInput && activities.length > 0 && (
                 <div className="welcome-message">
-                  <h3>🏃‍♂️ Ready to analyze your performance!</h3>
+                  <h3>Ready to analyze your performance</h3>
                   <p>Select a distance above to compare your runs and see how you've improved over time.</p>
-                  <p>Loaded {activities.length} runs from your Strava account.</p>
+                  <p>Loaded {activities.length} runs from {loadedFromDB ? 'database' : 'Strava'}.</p>
                 </div>
               )}
             </div>
