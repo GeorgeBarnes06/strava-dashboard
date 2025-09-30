@@ -312,7 +312,7 @@ function App() {
   return (
     <div className="app-container">
       {!isLoggedIn ? (
-        <div>
+        <div className="login-wrapper">
           <h1>Run Performance Analyzer</h1>
           <div className="login-section">
             <h1>Welcome</h1>
